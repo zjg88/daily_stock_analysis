@@ -254,7 +254,7 @@ def _handle_async_analysis_batch(
     selection_source = request.selection_source if (is_single or preserve_batch_metadata) else None
     notify = getattr(request, "notify", True)
 
-    accepted_tasks, duplicate_errors = task_queue.submit_tasks_batch(
+    submit_kwargs = dict(
         stock_codes=stock_codes,
         stock_name=stock_name,
         original_query=original_query,
@@ -263,6 +263,8 @@ def _handle_async_analysis_batch(
         force_refresh=request.force_refresh,
         notify=notify,
     )
+
+    accepted_tasks, duplicate_errors = task_queue.submit_tasks_batch(**submit_kwargs)
 
     accepted = [
         BatchTaskAcceptedItem(
@@ -345,11 +347,12 @@ def _handle_sync_analysis(
         )
 
         if result is None:
+            error_message = service.last_error or f"分析股票 {stock_code} 失败"
             raise HTTPException(
                 status_code=500,
                 detail={
                     "error": "analysis_failed",
-                    "message": f"分析股票 {stock_code} 失败"
+                    "message": error_message,
                 }
             )
 
@@ -480,6 +483,7 @@ async def task_stream():
     - connected: 连接成功
     - task_created: 新任务创建
     - task_started: 任务开始执行
+    - task_progress: 任务阶段进度更新
     - task_completed: 任务完成
     - task_failed: 任务失败
     - heartbeat: 心跳（每 30 秒）
@@ -514,8 +518,8 @@ async def task_stream():
                         "timestamp": datetime.now().isoformat()
                     })
         except asyncio.CancelledError:
-            # 客户端断开连接
-            pass
+            logger.debug("SSE client disconnected, cancelling event generator")
+            raise
         finally:
             task_queue.unsubscribe(event_queue)
     
